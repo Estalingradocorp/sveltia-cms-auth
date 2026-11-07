@@ -467,9 +467,13 @@ export default {
    * @see https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
    * @see https://docs.gitlab.com/ee/api/oauth2.html#authorization-code-flow
    */
-  // Password mode: serve login form for Sveltia and editor without GitHub OAuth
-  // All secrets come from env (ADMIN_USER, ADMIN_PASS, GITHUB_TOKEN), never from code.
-  if (method === 'GET' && ['/auth', '/oauth/authorize'].includes(pathname)) {
+  async fetch(request, env) {
+    const { method, url } = request;
+    const { pathname } = new URL(url);
+
+    // Password mode: serve login form for Sveltia and editor without GitHub OAuth
+    // All secrets come from env (ADMIN_USER, ADMIN_PASS, GITHUB_TOKEN), never from code.
+    if (method === 'GET' && ['/auth', '/oauth/authorize'].includes(pathname)) {
     const qs = new URLSearchParams(new URL(url).search);
     if (qs.get('provider') === 'password' || qs.get('mode') === 'password' || qs.get('client') === 'editor') {
       return handleLoginForm(request, env);
