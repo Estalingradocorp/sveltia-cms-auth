@@ -410,6 +410,53 @@ const handleCallback = async (request, env) => {
   return outputHTML({ env, provider, token, error });
 };
 
+const escapeHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const safeEqual = (a, b) => {
+  const sa = String(a ?? '');
+  const sb = String(b ?? '');
+  if (sa.length !== sb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < sa.length; i++) diff |= sa.charCodeAt(i) ^ sb.charCodeAt(i);
+  return diff === 0;
+};
+const handleLoginForm = (request, env) => {
+  const qs = new URLSearchParams(new URL(request.url).search);
+  const provider = qs.get('provider') || 'github';
+  const client = qs.get('client') || '';
+  const redirect = qs.get('redirect') || '';
+  const siteId = qs.get('site_id') || '';
+  const hidden = (name, val) => val ? `<input type="hidden" name="${name}" value="${escapeHtml(val)}">` : '';
+  return new Response(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Acceso al panel</title><style>body{font-family:system-ui;background:#faf8f5;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}.caja{background:#fff;border:1px solid #eee;padding:2rem;border-radius:12px;width:min(92vw,360px);box-shadow:0 4px 20px rgba(0,0,0,.06)}label{display:block;margin:12px 0 6px;font-size:14px}input{width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;box-sizing:border-box}button{width:100%;margin-top:16px;padding:10px;background:#c0272d;color:#fff;border:0;border-radius:8px;cursor:pointer;font-weight:700}.err{color:#b00;margin-top:12px;font-size:14px}</style></head><body><form class="caja" method="post" action="/auth">${hidden('provider', provider)}${hidden('client', client)}${hidden('redirect', redirect)}${hidden('site_id', siteId)}<h1 style="font-size:20px;margin:0 0 4px">Panel de administración</h1><p style="margin:0 0 8px;color:#666;font-size:14px">Ingresá con tu usuario y contraseña.</p><label>Usuario<input name="user" autocomplete="username" required></label><label>Contraseña<input type="password" name="pass" autocomplete="current-password" required></label><button type="submit">Entrar</button></form></body></html>`, { headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
+};
+const handleLoginSubmit = async (request, env) => {
+  const { ADMIN_USER, ADMIN_PASS, GITHUB_TOKEN, ALLOWED_DOMAINS } = env;
+  if (!ADMIN_USER || !ADMIN_PASS || !GITHUB_TOKEN) {
+    return outputHTML({ env, provider: 'github', error: 'Panel no configurado.', errorCode: 'MISCONFIGURED_CLIENT' });
+  }
+  let form;
+  try { form = Object.fromEntries(await request.formData()); } catch { return new Response('Solicitud inválida', { status: 400 }); }
+  const userOk = safeEqual(form.user ?? '', ADMIN_USER);
+  const passOk = safeEqual(form.pass ?? '', ADMIN_PASS);
+  if (!userOk || !passOk) {
+    return new Response('Usuario o contraseña incorrectos', { status: 401, headers: { 'Content-Type': 'text/plain;charset=UTF-8' } });
+  }
+  const redirect = String(form.redirect || '');
+  const client = String(form.client || '');
+  if (client === 'editor' && redirect) {
+    try {
+      const target = new URL(redirect);
+      const patterns = getDomainPatterns(ALLOWED_DOMAINS);
+      const allowed = !patterns.length || patterns.some((p) => new RegExp(p).test(target.hostname));
+      if (allowed) {
+        const loc = `${target.origin}${target.pathname}#access_token=${encodeURIComponent(GITHUB_TOKEN)}`;
+        return new Response('', { status: 302, headers: { Location: loc } });
+      }
+    } catch { // ignore, fallback to popup flow
+    }
+  }
+  return outputHTML({ env, provider: 'github', token: GITHUB_TOKEN });
+};
+
 export default {
   /**
    * The main request handler.
@@ -420,17 +467,27 @@ export default {
    * @see https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
    * @see https://docs.gitlab.com/ee/api/oauth2.html#authorization-code-flow
    */
-  async fetch(request, env) {
-    const { method, url } = request;
-    const { pathname } = new URL(url);
-
-    if (method === 'GET' && ['/auth', '/oauth/authorize'].includes(pathname)) {
-      return handleAuth(request, env);
+  // Password mode: serve login form for Sveltia and editor without GitHub OAuth
+  // All secrets come from env (ADMIN_USER, ADMIN_PASS, GITHUB_TOKEN), never from code.
+  if (method === 'GET' && ['/auth', '/oauth/authorize'].includes(pathname)) {
+    const qs = new URLSearchParams(new URL(url).search);
+    if (qs.get('provider') === 'password' || qs.get('mode') === 'password' || qs.get('client') === 'editor') {
+      return handleLoginForm(request, env);
     }
+    return handleAuth(request, env);
+  }
 
-    if (method === 'GET' && ['/callback', '/oauth/redirect'].includes(pathname)) {
-      return handleCallback(request, env);
-    }
+  if (method === 'POST' && ['/auth', '/login', '/editor-auth'].includes(pathname)) {
+    return handleLoginSubmit(request, env);
+  }
+
+  if (method === 'GET' && ['/editor-auth', '/login'].includes(pathname)) {
+    return handleLoginForm(request, env);
+  }
+
+  if (method === 'GET' && ['/callback', '/oauth/redirect'].includes(pathname)) {
+    return handleCallback(request, env);
+  }
 
     return new Response('', { status: 404 });
   },
