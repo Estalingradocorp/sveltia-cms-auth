@@ -448,7 +448,8 @@ const handleLoginSubmit = async (request, env) => {
       const patterns = getDomainPatterns(ALLOWED_DOMAINS);
       const allowed = !patterns.length || patterns.some((p) => new RegExp(p).test(target.hostname));
       if (allowed) {
-        const loc = `${target.origin}${target.pathname}#access_token=${encodeURIComponent(GITHUB_TOKEN)}`;
+        const path = target.pathname === '/' ? '/admin/editor.html' : target.pathname;
+        const loc = `${target.origin}${path}#access_token=${encodeURIComponent(GITHUB_TOKEN)}`;
         return new Response('', { status: 302, headers: { Location: loc } });
       }
     } catch { // ignore, fallback to popup flow
